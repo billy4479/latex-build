@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 func getOutputPath(path string, baseDir string) string {
@@ -87,26 +88,55 @@ var (
 	cancelMapLock sync.Mutex
 )
 
-func BuildFile(path string, config *Config, recursion int) error {
+func BuildFile(path string, config *Config, recursion int, force bool, stop chan struct{}) error {
+	startTime := time.Now()
 	err := ensureOutDirectories(config)
 	if err != nil {
 		return err
 	}
 
-	ok, err := needsBuild(path, config)
-	if err != nil {
-		return err
+	if !force {
+		ok, err := needsBuild(path, config)
+		if err != nil {
+			return err
+		}
+
+		if !ok {
+			return nil
+		}
 	}
 
-	if !ok {
-		return nil
-	}
+	fmt.Printf("%s %s\n",
+		func() string {
+			if recursion == 1 {
+				return "Building"
+			} else {
+				return "Rebuiling"
+			}
+		}(),
+		path,
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Cancel old jobs before starting a new one
 	cancelMapLock.Lock()
+	if oldCancel, ok := cancelMap[path]; ok {
+		oldCancel()
+	}
 	cancelMap[path] = cancel
 	cancelMapLock.Unlock()
+
+	defer func() {
+		cancelMapLock.Lock()
+		delete(cancelMap, path)
+		cancelMapLock.Unlock()
+	}()
+
+	go func() {
+		<-stop
+		cancel()
+	}()
 
 	cmd := exec.CommandContext(
 		ctx,
@@ -123,12 +153,6 @@ func BuildFile(path string, config *Config, recursion int) error {
 		path,
 	)
 
-	defer func() {
-		cancelMapLock.Lock()
-		delete(cancelMap, path)
-		cancelMapLock.Unlock()
-	}()
-
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
@@ -137,12 +161,24 @@ func BuildFile(path string, config *Config, recursion int) error {
 
 		exitErr, ok := err.(*exec.ExitError)
 		if ok {
-			fmt.Fprintf(os.Stderr, "Build failed with code: %d\n", exitErr.ProcessState.ExitCode())
+			fmt.Fprintf(os.Stderr, "Build of %s failed with code: %d\n", path, exitErr.ProcessState.ExitCode())
 			_, _ = os.Stderr.Write(output)
 			return exitErr
 		}
 		return err
 	}
+
+	fmt.Printf("Completed compiling %s for the %s time in %fs\n",
+		path,
+		func() string {
+			if recursion == 1 {
+				return "1st"
+			} else {
+				return "2nd"
+			}
+		}(),
+		time.Since(startTime).Seconds(),
+	)
 
 	if strings.Contains(string(output), "undefined references") {
 		// TODO: I don't care about bibtex because I don't use it,
@@ -150,9 +186,10 @@ func BuildFile(path string, config *Config, recursion int) error {
 
 		// I think we should build at most twice, right?
 		if recursion >= 2 {
-			return fmt.Errorf("Maximum recursion reached")
+			return fmt.Errorf("Maximum recursion reached for %s", path)
 		}
-		return BuildFile(path, config, recursion+1)
+
+		return BuildFile(path, config, recursion+1, force, stop)
 	}
 
 	err = os.Rename(
@@ -163,25 +200,35 @@ func BuildFile(path string, config *Config, recursion int) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "%s\n", path)
-
 	return nil
 }
 
-func BuildAll(config *Config) error {
+func BuildAll(config *Config, force bool, stopAll chan struct{}) error {
+	startTime := time.Now()
 	sources, err := getSources(config)
 	if err != nil {
 		return err
 	}
 
+	stopChans := make(map[string]chan struct{})
+
+	go func() {
+		<-stopAll
+		for _, stop := range stopChans {
+			stop <- struct{}{}
+		}
+	}()
+
 	hasError := false
 	wg := sync.WaitGroup{}
 	for _, source := range sources {
 		wg.Add(1)
+		stop := make(chan struct{})
+		stopChans[source] = stop
 		go func(source string) {
-			err = BuildFile(source, config, 1)
+			err = BuildFile(source, config, 1, force, stop)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "build %s: %v\n", source, err)
+				fmt.Fprintf(os.Stderr, "Build error %s: %v\n", source, err)
 				hasError = true
 			}
 			wg.Done()
@@ -189,13 +236,13 @@ func BuildAll(config *Config) error {
 	}
 	wg.Wait()
 
+	fmt.Printf("Built %d files in %fs\n",
+		len(sources),
+		time.Since(startTime).Seconds(),
+	)
+
 	if hasError {
 		return fmt.Errorf("Compilation completed with errors")
 	}
-	return nil
-}
-
-func Watch(config *Config) error {
-
 	return nil
 }

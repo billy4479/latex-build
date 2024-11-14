@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 
 	"github.com/urfave/cli/v2"
 )
@@ -10,16 +11,32 @@ import (
 func main() {
 	err := (&cli.App{
 		Name: "latex-build",
+		Authors: []*cli.Author{
+			{Name: "billy4479"},
+		},
+		Usage: "Build and watch latex files",
 		Action: func(ctx *cli.Context) error {
 			config, err := LoadConfig()
 			if err != nil {
 				return err
 			}
+			force := ctx.Bool("force")
+
+			sigintChan := make(chan os.Signal, 1)
+			signal.Notify(sigintChan, os.Interrupt)
+
+			stopChan := make(chan struct{})
+			go func() {
+				<-sigintChan
+				fmt.Println("\nstopping")
+				stopChan <- struct{}{}
+				close(stopChan)
+			}()
 
 			if ctx.Bool("watch") {
-				return Watch(config)
+				return WatchAll(config, force, stopChan)
 			} else {
-				return BuildAll(config)
+				return BuildAll(config, force, stopChan)
 			}
 		},
 		Commands: []*cli.Command{
@@ -29,14 +46,23 @@ func main() {
 					config := NewConfig()
 					return WriteConfig(config)
 				},
+				Usage: "Create a new config",
 			},
 		},
 		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:     "force",
+				Required: false,
+				Value:    false,
+				Aliases:  []string{"f"},
+				Usage:    "Force recompilation",
+			},
 			&cli.BoolFlag{
 				Name:     "watch",
 				Required: false,
 				Value:    false,
 				Aliases:  []string{"w"},
+				Usage:    "Watch and rebuild the file(s) on changes",
 			},
 		},
 	}).Run(os.Args)
