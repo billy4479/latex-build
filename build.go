@@ -9,12 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
 func getOutputPath(path string, baseDir string) string {
-	return filepath.Join(baseDir, path[:len(path)-4]+".pdf")
+	basePath := filepath.Base(path)
+	return filepath.Join(baseDir, basePath[:len(basePath)-4]+".pdf")
 }
 
 func needsBuild(path string, config *Config) (bool, error) {
@@ -83,30 +83,14 @@ func ensureOutDirectories(config *Config) error {
 	return nil
 }
 
-var (
-	cancelMap     map[string]context.CancelFunc = make(map[string]context.CancelFunc)
-	cancelMapLock sync.Mutex
-)
-
-func BuildFile(path string, config *Config, recursion int, force bool, stop chan struct{}) error {
+func BuildFile(job *Job, config *Config, recursion int) error {
 	startTime := time.Now()
 	err := ensureOutDirectories(config)
 	if err != nil {
 		return err
 	}
 
-	if !force {
-		ok, err := needsBuild(path, config)
-		if err != nil {
-			return err
-		}
-
-		if !ok {
-			return nil
-		}
-	}
-
-	fmt.Printf("%s %s\n",
+	fmt.Printf("Builder: %s %s\n",
 		func() string {
 			if recursion == 1 {
 				return "Building"
@@ -114,35 +98,29 @@ func BuildFile(path string, config *Config, recursion int, force bool, stop chan
 				return "Rebuiling"
 			}
 		}(),
-		path,
+		job.path,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	// Cancel old jobs before starting a new one
-	cancelMapLock.Lock()
-	if oldCancel, ok := cancelMap[path]; ok {
-		oldCancel()
-	}
-	cancelMap[path] = cancel
-	cancelMapLock.Unlock()
-
-	defer func() {
-		cancelMapLock.Lock()
-		delete(cancelMap, path)
-		cancelMapLock.Unlock()
-	}()
+	done := make(chan struct{})
+	stopped := false
 
 	go func() {
-		<-stop
-		cancel()
+		select {
+		case <-job.stop.Subscribe():
+			fmt.Printf("Builder: %s cancelled\n", job.path)
+			stopped = true
+			cancel()
+		case <-done:
+			return
+		}
 	}()
 
 	cmd := exec.CommandContext(
 		ctx,
 		config.Compiler,
 		"--output-directory="+config.AuxDir,
-		"--interaction-mode=nonstop",
+		"--interaction=nonstopmode",
 		func() string {
 			if config.ShellEscape {
 				return "--shell-escape"
@@ -150,26 +128,28 @@ func BuildFile(path string, config *Config, recursion int, force bool, stop chan
 				return "--no-shell-escape"
 			}
 		}(),
-		path,
+		job.path,
 	)
 
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-			return nil
-		}
+	if stopped {
+		fmt.Printf("Builder: job %s cancelled\n", job.path)
+		return nil
+	}
 
+	done <- struct{}{}
+	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if ok {
-			fmt.Fprintf(os.Stderr, "Build of %s failed with code: %d\n", path, exitErr.ProcessState.ExitCode())
+			// fmt.Printf("Builder: build of %s failed with code: %d\n", job.path, exitErr.ProcessState.ExitCode())
 			_, _ = os.Stderr.Write(output)
 			return exitErr
 		}
 		return err
 	}
 
-	fmt.Printf("Completed compiling %s for the %s time in %fs\n",
-		path,
+	fmt.Printf("Builder: completed compiling %s for the %s time in %fs\n",
+		job.path,
 		func() string {
 			if recursion == 1 {
 				return "1st"
@@ -186,63 +166,44 @@ func BuildFile(path string, config *Config, recursion int, force bool, stop chan
 
 		// I think we should build at most twice, right?
 		if recursion >= 2 {
-			return fmt.Errorf("Maximum recursion reached for %s", path)
+			return fmt.Errorf("Maximum recursion reached for %s", job.path)
 		}
 
-		return BuildFile(path, config, recursion+1, force, stop)
+		return BuildFile(job, config, recursion+1)
 	}
 
 	err = os.Rename(
-		getOutputPath(path, config.AuxDir),
-		getOutputPath(path, config.OutputFolder),
+		getOutputPath(job.path, config.AuxDir),
+		getOutputPath(job.path, config.OutputFolder),
 	)
-	if err != nil {
-		return err
-	}
 
-	return nil
+	return err
 }
 
-func BuildAll(config *Config, force bool, stopAll chan struct{}) error {
+func BuildAll(config *Config, force bool, stopBroadcast *StopBroadcast) error {
 	startTime := time.Now()
 	sources, err := getSources(config)
 	if err != nil {
 		return err
 	}
 
-	stopChans := make(map[string]chan struct{})
+	jobDispatcher := NewJobDispatcher(config, stopBroadcast)
 
-	go func() {
-		<-stopAll
-		for _, stop := range stopChans {
-			stop <- struct{}{}
-		}
-	}()
+	jobDispatcher.Start()
 
-	hasError := false
-	wg := sync.WaitGroup{}
 	for _, source := range sources {
-		wg.Add(1)
-		stop := make(chan struct{})
-		stopChans[source] = stop
-		go func(source string) {
-			err = BuildFile(source, config, 1, force, stop)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Build error %s: %v\n", source, err)
-				hasError = true
-			}
-			wg.Done()
-		}(source)
+		err = jobDispatcher.AddJob(source, force)
+		if err != nil {
+			return err
+		}
 	}
-	wg.Wait()
+
+	jobDispatcher.Wait()
 
 	fmt.Printf("Built %d files in %fs\n",
 		len(sources),
 		time.Since(startTime).Seconds(),
 	)
 
-	if hasError {
-		return fmt.Errorf("Compilation completed with errors")
-	}
 	return nil
 }
