@@ -8,17 +8,17 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-func WatchAll(config *Config, force bool, stopBroadcast *StopBroadcast) error {
+func WatchAll(config *Config, force bool, stopAll chan struct{}) error {
 	sources, err := getSources(config)
 	if err != nil {
 		return err
 	}
 
-	return Watch(sources, config, force, stopBroadcast)
+	return Watch(sources, config, force, stopAll)
 }
 
-func Watch(files []string, config *Config, force bool, stopBroadcast *StopBroadcast) error {
-	jobDispatcher := NewJobDispatcher(config, stopBroadcast)
+func Watch(files []string, config *Config, force bool, stopAll chan struct{}) error {
+	jobDispatcher := NewJobDispatcher(config, stopAll)
 	jobDispatcher.Start()
 
 	errors := make(chan error)
@@ -29,7 +29,7 @@ func Watch(files []string, config *Config, force bool, stopBroadcast *StopBroadc
 			case err := <-errors:
 				fmt.Printf("Watcher: got error %v\n", err)
 
-			case <-stopBroadcast.Subscribe():
+			case <-stopAll:
 				return
 			}
 		}
@@ -56,7 +56,7 @@ func Watch(files []string, config *Config, force bool, stopBroadcast *StopBroadc
 
 	for {
 		select {
-		case <-stopBroadcast.Subscribe():
+		case <-stopAll:
 			return nil
 		case event := <-watcher.Events:
 			fmt.Println(event)

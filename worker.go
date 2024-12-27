@@ -1,30 +1,34 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 type Worker struct {
-	Id            int
-	currentJob    *Job
-	config        *Config
-	newJob        chan *Job
-	Done          chan error
-	stopBroadcast *StopBroadcast
+	Id         int
+	currentJob *Job
+	config     *Config
+	newJob     chan *Job
+	Done       chan error
+	stop       chan struct{}
+	wg         *sync.WaitGroup
 }
 
-func NewWorker(config *Config, id int, stopBroadcast *StopBroadcast) *Worker {
+func NewWorker(config *Config, id int, stop chan struct{}, wg *sync.WaitGroup) *Worker {
 	return &Worker{
-		Id:            id,
-		config:        config,
-		newJob:        make(chan *Job),
-		Done:          make(chan error),
-		currentJob:    nil,
-		stopBroadcast: stopBroadcast,
+		Id:         id,
+		config:     config,
+		newJob:     make(chan *Job),
+		Done:       make(chan error, 1),
+		currentJob: nil,
+		stop:       stop,
+		wg:         wg,
 	}
 }
 
 func (w *Worker) Start() {
 	go func() {
-		stop := w.stopBroadcast.Subscribe()
 		for {
 			select {
 			case job := <-w.newJob:
@@ -40,8 +44,10 @@ func (w *Worker) Start() {
 
 				w.Done <- err
 				w.currentJob = nil
+				fmt.Printf("Worker %02d calling Done()\n", w.Id)
+				w.wg.Done()
 
-			case <-stop:
+			case <-w.stop:
 				fmt.Printf("Worker %02d: stopping\n", w.Id)
 				return
 			}

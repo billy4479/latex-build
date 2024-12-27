@@ -24,19 +24,18 @@ func main() {
 
 			sigintChan := make(chan os.Signal, 1)
 			signal.Notify(sigintChan, os.Interrupt)
-			stopBroadcast := &StopBroadcast{}
+			stopAll := make(chan struct{})
 
 			go func() {
 				<-sigintChan
 				fmt.Println("\nstopping")
-				stopBroadcast.Broadcast(struct{}{})
-				stopBroadcast.Close()
+				close(stopAll)
 			}()
 
 			if ctx.Bool("watch") {
-				return WatchAll(config, force, stopBroadcast)
+				return WatchAll(config, force, stopAll)
 			} else {
-				return BuildAll(config, force, stopBroadcast)
+				return BuildAll(config, force, stopAll)
 			}
 
 		},

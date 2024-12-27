@@ -7,12 +7,12 @@ import (
 
 type Job struct {
 	path string
-	// TODO: maybe this one can be just a channel
-	stop *StopBroadcast
+	stop chan struct{}
 }
 
 type BuildQueue struct {
 	jobs []*Job
+	wg   *sync.WaitGroup
 	sync.Mutex
 }
 
@@ -27,21 +27,20 @@ func (q *BuildQueue) Enqueue(job string) {
 	q.Lock()
 	defer q.Unlock()
 
+	newJob := &Job{
+		path: job,
+		stop: make(chan struct{}),
+	}
+
 	for _, j := range q.jobs {
 		if j.path == job {
-			j.stop.Broadcast(struct{}{})
-			q.jobs = append(q.jobs, &Job{
-				path: job,
-				stop: j.stop,
-			})
+			close(j.stop)
+			q.jobs = append(q.jobs, newJob)
 			return
 		}
 	}
 
-	q.jobs = append(q.jobs, &Job{
-		path: job,
-		stop: &StopBroadcast{},
-	})
+	q.jobs = append(q.jobs, newJob)
 }
 
 func (q *BuildQueue) Dequeue() (*Job, bool) {
@@ -62,8 +61,8 @@ func (q *BuildQueue) Clear() {
 	fmt.Println("BuildQueue: emptying queue")
 	q.Lock()
 	for _, j := range q.jobs {
-		j.stop.Broadcast(struct{}{})
-		j.stop.Close()
+		close(j.stop)
+		q.wg.Done()
 	}
 	q.jobs = nil
 	q.Unlock()

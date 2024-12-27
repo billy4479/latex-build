@@ -107,7 +107,7 @@ func BuildFile(job *Job, config *Config, recursion int) error {
 
 	go func() {
 		select {
-		case <-job.stop.Subscribe():
+		case <-job.stop:
 			fmt.Printf("Builder: %s cancelled\n", job.path)
 			stopped = true
 			cancel()
@@ -180,14 +180,14 @@ func BuildFile(job *Job, config *Config, recursion int) error {
 	return err
 }
 
-func BuildAll(config *Config, force bool, stopBroadcast *StopBroadcast) error {
+func BuildAll(config *Config, force bool, stopAll chan struct{}) error {
 	startTime := time.Now()
 	sources, err := getSources(config)
 	if err != nil {
 		return err
 	}
 
-	jobDispatcher := NewJobDispatcher(config, stopBroadcast)
+	jobDispatcher := NewJobDispatcher(config, stopAll)
 
 	jobDispatcher.Start()
 
