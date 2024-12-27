@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -27,7 +29,7 @@ func Watch(files []string, config *Config, force bool, stopAll chan struct{}) er
 		for {
 			select {
 			case err := <-errors:
-				fmt.Printf("Watcher: got error %v\n", err)
+				fmt.Printf("[Watcher]: got error %v\n", err)
 
 			case <-stopAll:
 				return
@@ -41,12 +43,18 @@ func Watch(files []string, config *Config, force bool, stopAll chan struct{}) er
 	}
 
 	for _, file := range files {
-		err = watcher.Add(file)
+		fmt.Printf("[Watcher]: watching %s\n", file)
+		// err = watcher.Add(file)
+		// if err != nil {
+		// 	return err
+		// }
+
+		parent := filepath.Dir(file)
+		// fmt.Printf("[Watcher]: watching %s\n", parent)
+		err = watcher.Add(parent)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Watcher: watching %s\n", file)
-
 		// Make sure the file has been built at least once
 		err := jobDispatcher.AddJob(file, force)
 		if err != nil {
@@ -54,35 +62,42 @@ func Watch(files []string, config *Config, force bool, stopAll chan struct{}) er
 		}
 	}
 
+	toBeRebuilt := make(map[string]int)
+	toBeRebuiltLock := sync.Mutex{}
+
 	for {
 		select {
 		case <-stopAll:
+			jobDispatcher.Wait()
 			return nil
 		case event := <-watcher.Events:
-			fmt.Println(event)
-			if event.Has(fsnotify.Remove) {
-				fmt.Printf("Watcher: %s was removed\n", event.Name)
+			file := filepath.Clean(event.Name)
+			if !slices.Contains(files, file) {
 				continue
 			}
 
-			if event.Has(fsnotify.Rename) &&
-				// This is because vim doesn't write to them directly.
-				// If it was a file we were already watching continue as if it was a write.
-				!slices.Contains(files, event.Name) {
-				// The file was renamed to something new
-				// TODO: Should we add a new watcher here? Cancel the existing one?
-
-				fmt.Printf("Watcher: %s was renamed\n", event.Name)
-				continue
-			}
-
-			if event.Has(fsnotify.Write) || (event.Has(fsnotify.Rename) && slices.Contains(files, event.Name)) {
+			if event.Has(fsnotify.Write) {
 				go func() {
-					fmt.Printf("Watcher: %s has changed\n", event.Name)
-					// Wait some time for the write to finish, not very elegant I know
+					fmt.Printf("[Watcher]: %s has changed\n", file)
+
+					toBeRebuiltLock.Lock()
+					toBeRebuilt[file] += 1
+					myId := toBeRebuilt[file]
+					toBeRebuiltLock.Unlock()
+
+					// Wait some time for the write to finish and for the user to finish typing
 					<-time.After(200 * time.Millisecond)
-					fmt.Printf("Watcher: Scheduling rebuild for %s\n", event.Name)
-					err := jobDispatcher.AddJob(event.Name, force)
+
+					toBeRebuiltLock.Lock()
+					if myId != toBeRebuilt[file] {
+						toBeRebuiltLock.Unlock()
+						fmt.Printf("[Watcher]: Dropping build for %s for event %s:%d\n", file, event.Op.String(), myId)
+						return
+					}
+					toBeRebuiltLock.Unlock()
+
+					fmt.Printf("[Watcher]: Scheduling rebuild for %s because of %s:%d\n", file, event.Op.String(), myId)
+					err := jobDispatcher.AddJob(file, force)
 					if err != nil {
 						errors <- err
 						return

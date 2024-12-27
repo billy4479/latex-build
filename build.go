@@ -90,7 +90,7 @@ func BuildFile(job *Job, config *Config, recursion int) error {
 		return err
 	}
 
-	fmt.Printf("Builder: %s %s\n",
+	fmt.Printf("[Builder]: %s %s\n",
 		func() string {
 			if recursion == 1 {
 				return "Building"
@@ -108,9 +108,15 @@ func BuildFile(job *Job, config *Config, recursion int) error {
 	go func() {
 		select {
 		case <-job.stop:
-			fmt.Printf("Builder: %s cancelled\n", job.path)
+			fmt.Printf("[Builder]: %s cancelled\n", job.path)
+
 			stopped = true
 			cancel()
+
+			// Is this needed? Can we improve?
+			out := getOutputPath(job.path, config.OutputFolder)
+			_ = os.Remove(out[:len(out)-4] + ".aux")
+
 		case <-done:
 			return
 		}
@@ -133,7 +139,7 @@ func BuildFile(job *Job, config *Config, recursion int) error {
 
 	output, err := cmd.CombinedOutput()
 	if stopped {
-		fmt.Printf("Builder: job %s cancelled\n", job.path)
+		fmt.Printf("[Builder]: job %s cancelled\n", job.path)
 		return nil
 	}
 
@@ -141,14 +147,14 @@ func BuildFile(job *Job, config *Config, recursion int) error {
 	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if ok {
-			// fmt.Printf("Builder: build of %s failed with code: %d\n", job.path, exitErr.ProcessState.ExitCode())
+			// fmt.Printf("[Builder]: build of %s failed with code: %d\n", job.path, exitErr.ProcessState.ExitCode())
 			_, _ = os.Stderr.Write(output)
 			return exitErr
 		}
 		return err
 	}
 
-	fmt.Printf("Builder: completed compiling %s for the %s time in %fs\n",
+	fmt.Printf("[Builder]: completed compiling %s for the %s time in %fs\n",
 		job.path,
 		func() string {
 			if recursion == 1 {

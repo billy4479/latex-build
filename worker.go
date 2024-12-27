@@ -32,10 +32,10 @@ func (w *Worker) Start() {
 		for {
 			select {
 			case job := <-w.newJob:
-				fmt.Printf("Worker %02d: starting job %s\n", w.Id, job.path)
+				fmt.Printf("[Worker %02d]: starting job %s\n", w.Id, job.path)
 
 				err := BuildFile(job, w.config, 1)
-				fmt.Printf("Worker %02d: job %s completed ", w.Id, job.path)
+				fmt.Printf("[Worker %02d]: job %s completed ", w.Id, job.path)
 				if err != nil {
 					fmt.Printf("with errors: %v\n", err)
 				} else {
@@ -44,11 +44,9 @@ func (w *Worker) Start() {
 
 				w.Done <- err
 				w.currentJob = nil
-				fmt.Printf("Worker %02d calling Done()\n", w.Id)
 				w.wg.Done()
 
 			case <-w.stop:
-				fmt.Printf("Worker %02d: stopping\n", w.Id)
 				return
 			}
 		}

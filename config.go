@@ -13,7 +13,7 @@ type Config struct {
 	ShellEscape     bool     `yaml:"shell-escape"`
 	AdditionalFlags []string `yaml:"additional-flags"`
 	IncludeFiles    []string `yaml:"include-files"`
-	Parallel        bool     `yaml:"parallel"`
+	Parallel        int      `yaml:"parallel"`
 }
 
 func NewConfig() *Config {
@@ -24,7 +24,7 @@ func NewConfig() *Config {
 		ShellEscape:     false,
 		AdditionalFlags: []string{},
 		IncludeFiles:    []string{"*.tex"},
-		Parallel:        true,
+		Parallel:        0,
 	}
 }
 

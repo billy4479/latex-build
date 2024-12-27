@@ -18,10 +18,9 @@ type JobDispatcher struct {
 }
 
 func NewJobDispatcher(config *Config, stopAll chan struct{}) *JobDispatcher {
-	// TODO: add a config for this
-	numWorkers := 1
+	numWorkers := config.Parallel
 
-	if config.Parallel {
+	if numWorkers == 0 {
 		numWorkers = runtime.NumCPU()
 	}
 
@@ -46,7 +45,7 @@ func NewJobDispatcher(config *Config, stopAll chan struct{}) *JobDispatcher {
 func (d *JobDispatcher) Start() {
 	selectBranches := []reflect.SelectCase{}
 
-	fmt.Printf("JobDispatcher: starting %d workers\n", len(d.workers))
+	fmt.Printf("[JobDispatcher]: starting %d workers\n", len(d.workers))
 
 	for i := range d.workers {
 		selectBranches = append(selectBranches, reflect.SelectCase{
@@ -67,7 +66,7 @@ func (d *JobDispatcher) Start() {
 
 			// stopAll fired
 			if id == len(selectBranches)-1 {
-				fmt.Println("JobDispatcher: stopping")
+				fmt.Println("[JobDispatcher]: stopping")
 				d.queue.Clear()
 				return
 			}
@@ -84,11 +83,11 @@ func (d *JobDispatcher) Start() {
 			nextJob, ok := d.queue.Dequeue()
 			if !ok {
 				// The queue is empty
-				fmt.Printf("JobDispatcher: worker %02d is done but no jobs are available\n", id)
+				fmt.Printf("[JobDispatcher]: worker %02d is done but no jobs are available\n", id)
 				continue
 			}
 
-			fmt.Printf("JobDispatcher: worker %02d is done, dispatching %s\n", id, nextJob.path)
+			fmt.Printf("[JobDispatcher]: worker %02d is done, dispatching %s\n", id, nextJob.path)
 			d.workers[id].AddJob(nextJob)
 		}
 	}()
@@ -111,17 +110,16 @@ func (d *JobDispatcher) AddJob(path string, force bool) error {
 
 	for i, w := range d.workers {
 		if w.currentJob != nil && w.currentJob.path == path {
-			fmt.Printf("JobDispatcher: worker %02d is already working on %s\n", i, path)
+			fmt.Printf("[JobDispatcher]: worker %02d is already working on %s\n", i, path)
 			close(w.currentJob.stop)
 		}
 	}
 
 	d.wg.Add(1)
-	fmt.Println("JobDispatcher: calling Add(1)")
 
 	for i, w := range d.workers {
 		if w.currentJob == nil {
-			fmt.Printf("JobDispatcher: worker %02d is available, dispatching %s\n", i, path)
+			fmt.Printf("[JobDispatcher]: worker %02d is available, dispatching %s\n", i, path)
 			stop := make(chan struct{})
 			go func(stop chan struct{}) {
 				<-d.stopAll
@@ -136,7 +134,7 @@ func (d *JobDispatcher) AddJob(path string, force bool) error {
 		}
 	}
 
-	fmt.Printf("JobDispatcher: no workers are available, enqueueing %s\n", path)
+	fmt.Printf("[JobDispatcher]: no workers are available, enqueueing %s\n", path)
 	d.queue.Enqueue(path)
 	return nil
 }

@@ -58,7 +58,7 @@ func (q *BuildQueue) Dequeue() (*Job, bool) {
 }
 
 func (q *BuildQueue) Clear() {
-	fmt.Println("BuildQueue: emptying queue")
+	fmt.Println("[BuildQueue]: emptying queue")
 	q.Lock()
 	for _, j := range q.jobs {
 		close(j.stop)
@@ -67,5 +67,5 @@ func (q *BuildQueue) Clear() {
 	q.jobs = nil
 	q.Unlock()
 
-	fmt.Println("BuildQueue: queue is empty")
+	fmt.Println("[BuildQueue]: queue is empty")
 }
