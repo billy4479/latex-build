@@ -165,8 +165,10 @@ func BuildFile(job *Job, config *Config, recursion int) error {
 		}(),
 		time.Since(startTime).Seconds(),
 	)
+	outputStr := string(output)
 
-	if strings.Contains(string(output), "undefined references") {
+	if strings.Contains(outputStr, "undefined references") ||
+		strings.Contains(outputStr, "LaTeX Warning: Temporary extra page added at the end. Rerun to get it removed.") {
 		// TODO: I don't care about bibtex because I don't use it,
 		//       but I guess this is where I'd add support to it
 

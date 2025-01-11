@@ -28,6 +28,7 @@
             gopls
             delve
             air
+            golangci-lint
           ];
           nativeBuildInputs = with pkgs; [
             go
